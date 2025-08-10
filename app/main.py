@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from .schemas import EarringsRequest, EarringsResponse
 from .suggester import suggest_for_face
+from .detect import router as detect_router  # NEW import
 
 load_dotenv()
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*")
@@ -28,3 +29,6 @@ def health():
 def suggest_earrings(body: EarringsRequest):
     suggestions = suggest_for_face(body.face_shape)
     return EarringsResponse(face_shape=body.face_shape, suggestions=suggestions)
+
+# NEW: mount the detect router
+app.include_router(detect_router)
