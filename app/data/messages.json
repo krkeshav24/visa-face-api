@@ -1,0 +1,38 @@
+{
+  "oval": {
+    "message": "Your Style Signature is Grace inspired by Lyra — a harmony of balanced proportions and timeless elegance. These designs will enhance your natural symmetry. Your facial energy matches with Rihanna and Julia Roberts.",
+    "rasa": "Grace",
+    "celestial": "Lyra",
+    "code": "OVL"
+  },
+  "round": {
+    "message": "Your Style Signature is Zen inspired by Orion — serene, balanced, and radiating quiet strength. These styles bring gentle focus to your features. Your facial energy matches with Selena Gomez and Aishwarya Rai Bachchan.",
+    "rasa": "Zen",
+    "celestial": "Orion",
+    "code": "RND"
+  },
+  "square": {
+    "message": "Your Style Signature is Valor inspired by Vega — bold lines and confident geometry. These designs amplify your inner strength. Your facial energy matches with Jennifer Aniston and Demi Moore.",
+    "rasa": "Valor",
+    "celestial": "Vega",
+    "code": "SQR"
+  },
+  "heart": {
+    "message": "Your Style Signature is Muse inspired by Atria — playful elegance with a touch of romance. These designs bring softness and allure to your look. Your facial energy matches with Naomi Campbell and Deepika Padukone.",
+    "rasa": "Muse",
+    "celestial": "Atria",
+    "code": "HRT"
+  },
+  "diamond": {
+    "message": "Your Style Signature is Verve inspired by Altair — dynamic, captivating, and full of energy. These pieces accentuate your natural sparkle. Your facial energy matches with Jennifer Lopez and Scarlett Johansson.",
+    "rasa": "Verve",
+    "celestial": "Altair",
+    "code": "DMN"
+  },
+  "rectangle": {
+    "message": "Your Style Signature is Poise inspired by Cygnus — graceful length and refined balance. These designs bring proportion and sophistication. Your facial energy matches with Katrina Kaif and Meryl Streep.",
+    "rasa": "Poise",
+    "celestial": "Cygnus",
+    "code": "OBL"
+  }
+}
