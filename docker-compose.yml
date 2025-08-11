@@ -1,0 +1,9 @@
+services:
+  visa-face-api:
+    build: .
+    container_name: visa-face-api
+    ports:
+      - "8000:8000"
+    environment:
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-https://YOUR-SHOP.myshopify.com}
+    restart: unless-stopped
