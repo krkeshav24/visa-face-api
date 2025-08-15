@@ -1,88 +1,347 @@
 # app/face_shape.py
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import List, Dict, Any, Optional, Tuple
+import io
 import math
-from typing import Dict, Tuple
+
+import cv2
 import numpy as np
-from PIL import Image
-import mediapipe as mp
 
-mp_face_mesh = mp.solutions.face_mesh
+# MediaPipe
+try:
+    import mediapipe as mp
+except Exception as e:
+    mp = None
 
-IDX = {
-    "CHIN": 152, "TOP": 10,
-    "LC": 234, "RC": 454,            # cheek width
-    "LJ": 172, "RJ": 397,            # jaw corners
-    "LEO": 33,  "LEI": 133,          # left eye outer/inner
-    "REI": 362, "REO": 263,          # right eye inner/outer
-}
+# ------------- Tunables (keep these in sync with frontend where possible) -------------
+ROLL_MAX_DEG = 3.0
+YAW_MAX_DEG  = 3.0
+TARGET_HL_H  = 0.38       # expected hairline(#10) → chin(#152) normalized height
+SIZE_TOL     = 0.03       # ± tolerance (i.e., accept if |h - TARGET_HL_H| <= TARGET_HL_H*SIZE_TOL)
+BRIGHT_MIN   = 40         # looser than frontend (server often receives compressed frames)
+BRIGHT_MAX   = 245
+BLUR_MIN_VAR = 60.0       # Laplacian variance; higher is sharper
 
-def _euclid(a: Tuple[float, float], b: Tuple[float, float]) -> float:
-    return math.hypot(a[0]-b[0], a[1]-b[1])
+# Landmarks we use (MediaPipe FaceMesh 468-index model)
+LM_HAIRLINE  = 10
+LM_CHIN      = 152
+LM_CHEEK_L   = 234
+LM_CHEEK_R   = 454
+LM_TEMPLE_L  = 127
+LM_TEMPLE_R  = 356
 
-def _xy(lm, w: int, h: int, i: int) -> Tuple[float, float]:
-    p = lm[i]; return (p.x * w, p.y * h)
+# --------------------------------------------------------------------------------------
 
-def compute_metrics(pil_img: Image.Image) -> Dict[str, float]:
-    """Returns H, FW, CW, JW, IPD (+ simple pose proxies) from a single image."""
-    img = np.array(pil_img.convert("RGB"))
-    h, w = img.shape[:2]
+@dataclass
+class FrameMeasure:
+    ok: bool
+    reason: Optional[str]
+    face_hl_h: float = 0.0
+    forehead_w: float = 0.0
+    cheek_w: float = 0.0
+    jaw_w: float = 0.0
+    roll_deg: float = 0.0
+    yaw_proxy: float = 0.0
+    brightness: float = 0.0
+    blur_var: float = 0.0
 
-    with mp_face_mesh.FaceMesh(static_image_mode=True, refine_landmarks=True, max_num_faces=1) as fm:
-        res = fm.process(img)
-        if not res.multi_face_landmarks:
-            raise ValueError("No face detected")
-        lm = res.multi_face_landmarks[0].landmark
 
-        chin, top = _xy(lm, w, h, IDX["CHIN"]), _xy(lm, w, h, IDX["TOP"])
-        lc, rc   = _xy(lm, w, h, IDX["LC"]),   _xy(lm, w, h, IDX["RC"])
-        lj, rj   = _xy(lm, w, h, IDX["LJ"]),   _xy(lm, w, h, IDX["RJ"])
+def _decode_image_bytes(b: bytes) -> Optional[np.ndarray]:
+    """Decode JPEG/PNG bytes to BGR image."""
+    if not b:
+        return None
+    arr = np.frombuffer(b, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    return img
 
-        leo, lei = _xy(lm, w, h, IDX["LEO"]), _xy(lm, w, h, IDX["LEI"])
-        reo, rei = _xy(lm, w, h, IDX["REO"]), _xy(lm, w, h, IDX["REI"])
-        left_eye  = ((leo[0]+lei[0])/2.0, (leo[1]+lei[1])/2.0)
-        right_eye = ((reo[0]+rei[0])/2.0, (reo[1]+rei[1])/2.0)
 
-        # hairline heuristic (extend to hairline)
-        H  = _euclid(chin, top) * 1.16
-        CW = _euclid(lc, rc)
-        JW = _euclid(lj, rj)
-        FW = CW
-        IPD = _euclid(left_eye, right_eye)
+def _brightness(img_bgr: np.ndarray) -> float:
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    return float(gray.mean())
 
-        # roll from eye line (deg)
-        roll_rad = math.atan2(reo[1] - leo[1], reo[0] - leo[0])
-        roll_deg = abs(roll_rad * 180.0 / math.pi)
 
-        # crude yaw proxy from z-depth + off-center
-        Lz, Rz = lm[IDX["LC"]].z, lm[IDX["RC"]].z
-        zdiff = abs(Lz - Rz)
-        midx = (lm[IDX["LC"]].x + lm[IDX["RC"]].x) / 2.0
-        xoff = abs(midx - 0.5)
-        yaw_proxy = 0.0
-        if zdiff > 0.01: yaw_proxy += (zdiff - 0.01) * 100.0
-        if xoff  > 0.03: yaw_proxy += (xoff  - 0.03) * 100.0
+def _blur_laplacian_var(img_bgr: np.ndarray) -> float:
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    return float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
+
+def _face_mesh() -> "mp.solutions.face_mesh.FaceMesh":
+    if mp is None:
+        raise RuntimeError("mediapipe is not available on the server.")
+    return mp.solutions.face_mesh.FaceMesh(
+        static_image_mode=True,
+        max_num_faces=1,
+        refine_landmarks=True,
+        min_detection_confidence=0.6,
+        min_tracking_confidence=0.6,
+    )
+
+
+def _landmarks_from_img(img_bgr: np.ndarray) -> Optional[List[Tuple[float, float, float]]]:
+    """Return list of 468 (x,y,z) normalized landmarks or None."""
+    h, w = img_bgr.shape[:2]
+    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+    with _face_mesh() as fm:
+        res = fm.process(img_rgb)
+    if not res.multi_face_landmarks:
+        return None
+    pts = res.multi_face_landmarks[0].landmark
+    # Return normalized (x,y,z)
+    return [(p.x, p.y, p.z) for p in pts]
+
+
+def _deg(rad: float) -> float:
+    return rad * 180.0 / math.pi
+
+
+def _estimate_roll_deg(lm: List[Tuple[float,float,float]]) -> float:
+    L = lm[33]   # outer left eye corner
+    R = lm[263]  # outer right eye corner
+    return abs(_deg(math.atan2(R[1] - L[1], R[0] - L[0])))
+
+
+def _estimate_yaw_proxy(lm: List[Tuple[float,float,float]]) -> float:
+    """
+    A small 'deg-ish' proxy using z-diff of cheeks + horizontal off-center.
+    Matches the frontend gating behavior.
+    """
+    Lz = lm[LM_CHEEK_L][2]
+    Rz = lm[LM_CHEEK_R][2]
+    zdiff = abs(Lz - Rz)
+    midx = (lm[LM_CHEEK_L][0] + lm[LM_CHEEK_R][0]) / 2.0
+    xoff = abs(midx - 0.5)
+    yaw = 0.0
+    if zdiff > 0.01:
+        yaw += (zdiff - 0.01) * 100.0
+    if xoff > 0.03:
+        yaw += (xoff - 0.03) * 100.0
+    return yaw
+
+
+def _in_frame(lm: List[Tuple[float,float,float]], margin: float = 0.06) -> bool:
+    minx = min(p[0] for p in lm)
+    miny = min(p[1] for p in lm)
+    maxx = max(p[0] for p in lm)
+    maxy = max(p[1] for p in lm)
+    return (minx >= margin and miny >= margin and
+            maxx <= (1.0 - margin) and maxy <= (1.0 - margin))
+
+
+def _dist_norm(a: Tuple[float,float,float], b: Tuple[float,float,float]) -> float:
+    """Euclidean distance in normalized (x,y)."""
+    dx = a[0] - b[0]; dy = a[1] - b[1]
+    return math.hypot(dx, dy)
+
+
+def _measure_from_landmarks(
+    lm: List[Tuple[float,float,float]],
+    brightness: float,
+    blur_var: float
+) -> FrameMeasure:
+    # Pose gates
+    roll = _estimate_roll_deg(lm)
+    yaw  = _estimate_yaw_proxy(lm)
+
+    # Size gate: hairline↔chin
+    face_hl_h = abs(lm[LM_CHIN][1] - lm[LM_HAIRLINE][1])  # normalized height
+
+    size_ok = abs(face_hl_h - TARGET_HL_H) <= (TARGET_HL_H * SIZE_TOL)
+    pose_ok = (roll <= ROLL_MAX_DEG) and (yaw <= YAW_MAX_DEG)
+    frame_ok = (
+        pose_ok and
+        BRIGHT_MIN <= brightness <= BRIGHT_MAX and
+        blur_var >= BLUR_MIN_VAR and
+        size_ok and
+        _in_frame(lm, margin=0.06)
+    )
+
+    # Widths (normalized)
+    # Forehead width at temples:
+    forehead_w = _dist_norm(lm[LM_TEMPLE_L], lm[LM_TEMPLE_R])
+    # Cheekbone width:
+    cheek_w    = _dist_norm(lm[LM_CHEEK_L], lm[LM_CHEEK_R])
+
+    # Jaw width approximation:
+    # Many maps use  jaw corners near  jawline; we proxy using
+    # the widest part in the lower half: take min/max x among points y >= midY.
+    midy = (lm[LM_HAIRLINE][1] + lm[LM_CHIN][1]) / 2.0
+    lower = [p for p in lm if p[1] >= midy]
+    if lower:
+        minx = min(p[0] for p in lower)
+        maxx = max(p[0] for p in lower)
+        jaw_w = maxx - minx
+    else:
+        jaw_w = cheek_w * 0.9  # fallback
+
+    return FrameMeasure(
+        ok=frame_ok,
+        reason=None if frame_ok else "gate_failed",
+        face_hl_h=face_hl_h,
+        forehead_w=forehead_w,
+        cheek_w=cheek_w,
+        jaw_w=jaw_w,
+        roll_deg=roll,
+        yaw_proxy=yaw,
+        brightness=brightness,
+        blur_var=blur_var
+    )
+
+
+def _classify_from_aggregates(
+    forehead_w: float,
+    cheek_w: float,
+    jaw_w: float,
+    face_hl_h: float
+) -> str:
+    """
+    Very lightweight heuristic:
+      - Long vs wide: aspect proxy = face_hl_h / cheek_w
+      - Forehead vs jaw tapering
+      - Cheek prominence
+    """
+    # Prevent division by zero
+    cheek_w = max(cheek_w, 1e-6)
+
+    aspect = face_hl_h / cheek_w  # taller → larger
+    taper  = forehead_w - jaw_w   # >0 means wider forehead than jaw
+    cheek_dominance = cheek_w - max(forehead_w, jaw_w)
+
+    # Thresholds tuned to normalized-landmark space; adjust as needed
+    if aspect >= 1.55:
+        # clearly long/tall
+        return "rectangle"  # aka oblong
+    if abs(taper) < 0.02 and aspect <= 1.2:
+        # similar forehead/jaw, near as wide as tall → square vs round by angles (we can't easily measure angles here)
+        # fallback split via cheek dominance:
+        return "square" if cheek_dominance < 0.01 else "round"
+    if taper > 0.03 and cheek_dominance > 0.00:
+        # bigger forehead, narrow jaw, strong cheeks
+        return "heart"
+    if cheek_dominance > 0.02 and taper < 0.00:
+        # cheekbones widest, forehead & jaw narrower
+        return "diamond"
+    if aspect < 1.25 and cheek_dominance <= 0.01:
+        return "round"
+    # default
+    return "oval"
+
+
+def _friendly_message(face_shape: str) -> str:
+    msgs = {
+        "oval":      "Balanced features with gentle curves — most earring styles will flatter you.",
+        "round":     "Softer angles with similar width and height — go for lengthening styles.",
+        "square":    "Strong jawline and broad forehead — try curves and drop styles to soften.",
+        "rectangle": "Longer than wide with a straighter jaw — choose wider or layered styles.",
+        "diamond":   "Cheekbones are the widest point — go for pieces that add width at the jaw.",
+        "heart":     "Wider forehead with a tapered jaw — balance with volume near the jawline.",
+    }
+    return msgs.get(face_shape, "Great! We’ve analyzed your face and picked styles to match.")
+
+
+def _measure_one(img_bgr: np.ndarray) -> FrameMeasure:
+    br = _brightness(img_bgr)
+    bl = _blur_laplacian_var(img_bgr)
+    lm = _landmarks_from_img(img_bgr)
+    if lm is None:
+        return FrameMeasure(ok=False, reason="no_face", brightness=br, blur_var=bl)
+    return _measure_from_landmarks(lm, brightness=br, blur_var=bl)
+
+
+def _aggregate_measures(ms: List[FrameMeasure]) -> FrameMeasure:
+    """Median aggregate across valid frames; returns a synthetic measure row."""
+    vals = [m for m in ms if m.ok]
+    if not vals:
+        # fallback: use the least-bad single (highest blur_var within brightness window)
+        fallback = sorted(ms, key=lambda m: (m.ok, m.blur_var, -abs(m.brightness-150)), reverse=True)[0]
+        return fallback
+
+    def med(lst: List[float]) -> float:
+        arr = np.array(lst, dtype=np.float64)
+        return float(np.median(arr))
+
+    return FrameMeasure(
+        ok=True,
+        reason=None,
+        face_hl_h=med([m.face_hl_h for m in vals]),
+        forehead_w=med([m.forehead_w for m in vals]),
+        cheek_w=med([m.cheek_w for m in vals]),
+        jaw_w=med([m.jaw_w for m in vals]),
+        roll_deg=med([m.roll_deg for m in vals]),
+        yaw_proxy=med([m.yaw_proxy for m in vals]),
+        brightness=med([m.brightness for m in vals]),
+        blur_var=med([m.blur_var for m in vals]),
+    )
+
+
+# ----------------------------- Public API (used by main.py) -----------------------------
+
+def analyze(frame_bytes: bytes) -> Dict[str, Any]:
+    """
+    Legacy single-frame analyzer.
+    """
+    if not frame_bytes:
+        return {"face_shape": None, "message": "No image received."}
+
+    img = _decode_image_bytes(frame_bytes)
+    if img is None:
+        return {"face_shape": None, "message": "Could not decode image."}
+
+    m = _measure_one(img)
+    if not m.ok:
         return {
-            "H": float(H), "FW": float(FW), "CW": float(CW), "JW": float(JW), "IPD": float(IPD),
-            "roll_deg": float(roll_deg), "yaw_proxy": float(yaw_proxy)
+            "face_shape": None,
+            "message": "Face not suitable (pose/light/blur/size). Please recapture.",
+            "debug": m.__dict__,
         }
 
-def classify_face_shape(m: Dict[str, float]) -> str:
-    """Heuristic mapping to: oval, round, square, rectangle, diamond, heart."""
-    H, FW, CW, JW = m["H"], m["FW"], m["CW"], m["JW"]
-    aspect = H / max(FW, 1e-6)
-    diff_fw_jw = abs(FW - JW) / max(FW, JW, 1e-6)
-    cw_top = (CW >= FW and CW >= JW)
-    fw_top = (FW >= CW and FW >= JW)
-    jw_small = JW / max(CW, FW, 1e-6) < 0.8
+    shape = _classify_from_aggregates(m.forehead_w, m.cheek_w, m.jaw_w, m.face_hl_h)
+    return {
+        "face_shape": shape,
+        "message": _friendly_message(shape),
+        "debug": m.__dict__,
+    }
 
-    if aspect >= 1.5 and diff_fw_jw < 0.12:
-        return "rectangle"
-    if 1.0 <= aspect <= 1.25 and diff_fw_jw <= 0.10 and fw_top:
-        return "square"
-    if 0.95 <= aspect <= 1.20 and diff_fw_jw <= 0.06 and CW >= FW * 0.96:
-        return "round"
-    if cw_top and jw_small and aspect >= 1.25:
-        return "heart"
-    if cw_top and FW / max(CW,1e-6) < 0.92 and JW / max(CW,1e-6) < 0.92 and aspect >= 1.2:
-        return "diamond"
-    return "oval"
+
+def analyze_frames(frames: List[bytes]) -> Dict[str, Any]:
+    """
+    New multi-frame analyzer: processes 3–5 (or up to ~20) frames,
+    filters bad ones, aggregates measurements, and classifies once.
+    """
+    if not frames:
+        return {"face_shape": None, "message": "No images received."}
+
+    measures: List[FrameMeasure] = []
+    for b in frames:
+        if not b:
+            continue
+        img = _decode_image_bytes(b)
+        if img is None:
+            continue
+        measures.append(_measure_one(img))
+
+    if not measures:
+        return {"face_shape": None, "message": "Could not decode any image."}
+
+    agg = _aggregate_measures(measures)
+
+    if not agg.ok:
+        # If none passed gates, report the best diagnostic we can
+        worst = sorted(measures, key=lambda m: (m.ok, m.blur_var), reverse=True)[0]
+        return {
+            "face_shape": None,
+            "message": "Frames failed quality checks (pose/light/blur/size). Please recapture.",
+            "debug": worst.__dict__,
+        }
+
+    shape = _classify_from_aggregates(agg.forehead_w, agg.cheek_w, agg.jaw_w, agg.face_hl_h)
+    return {
+        "face_shape": shape,
+        "message": _friendly_message(shape),
+        "debug": {
+            "aggregated": agg.__dict__,
+            "count_valid": sum(1 for m in measures if m.ok),
+            "count_total": len(measures),
+        }
+    }

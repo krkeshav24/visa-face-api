@@ -1,79 +1,92 @@
 # app/main.py
-import io, os, json
-from fastapi import FastAPI, UploadFile, File, HTTPException
+
+from typing import List, Optional, Dict, Any
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from PIL import Image
-from dotenv import load_dotenv
+from fastapi.responses import JSONResponse
 
-from .face_shape import compute_metrics, classify_face_shape
+import uvicorn
 
-load_dotenv()
+# Your analyzer module
+from app import face_shape  # adjust if your import path differs
 
-app = FastAPI(title="VISA Face API", version="1.0.0")
+app = FastAPI(title="VISA Face API", version="2.0")
 
-ALLOWED = [o.strip() for o in os.getenv("CORS_ALLOW_ORIGINS", "*").split(",") if o.strip()] or ["*"]
+# CORS — keep permissive, or tighten to your shop domain(s)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED,
+    allow_origins=["*"],          # e.g. ["https://yourshop.com"]
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
-MSG_PATH = os.path.join(DATA_DIR, "messages.json")
-
-NORM = {
-    "oval":"oval","round":"round","square":"square","diamond":"diamond","heart":"heart",
-    "rectangle":"rectangle","oblong":"rectangle","long":"rectangle"
-}
-
-def _load_messages() -> dict:
-    if not os.path.exists(MSG_PATH):
-        return {}
-    with open(MSG_PATH, "r", encoding="utf-8") as f:
-        raw = json.load(f)
-    out = {}
-    for k, v in raw.items():
-        key = NORM.get(str(k).strip().lower(), str(k).strip().lower())
-        out[key] = {
-            "message": (v.get("message") or "").strip(),
-            "rasa": v.get("rasa"),
-            "celestial": v.get("celestial"),
-            "code": v.get("code"),
-        }
-    return out
-
-MESSAGES = _load_messages()
-
 @app.get("/health")
-def health():
-    return {"ok": True, "messages_loaded": bool(MESSAGES), "allowed_origins": ALLOWED}
+def health() -> Dict[str, Any]:
+    return {"ok": True, "version": app.version}
+
+def _read_upload(file: UploadFile) -> bytes:
+    if file is None:
+        return b""
+    data = file.file.read()
+    file.file.close()
+    return data
 
 @app.post("/detect/face-shape")
-async def detect_face_shape(file: UploadFile = File(...)):
+async def detect_face_shape(
+    files: Optional[List[UploadFile]] = File(default=None, description="3–5 best frames"),
+    file: Optional[UploadFile] = File(default=None, description="legacy single frame")
+) -> JSONResponse:
     """
-    Expects: multipart/form-data with field 'file' (JPEG/PNG).
-    Returns: face_shape, message, rasa, celestial, code.
+    Accepts either:
+      - multiple frames via 'files' (preferred), or
+      - a single frame via 'file' (backward compatibility).
     """
-    try:
-        content = await file.read()
-        pil = Image.open(io.BytesIO(content)).convert("RGB")
-    except Exception as e:
-        raise HTTPException(400, f"Invalid image: {e}")
+    # Collect bytes in order (small list, we keep in memory)
+    frames: List[bytes] = []
 
-    try:
-        mets = compute_metrics(pil)
-        shape = classify_face_shape(mets).lower()
-        shape = NORM.get(shape, shape)
-    except Exception as e:
-        raise HTTPException(422, f"Detection failed: {e}")
+    if files:
+        for f in files:
+            if f and f.filename:
+                frames.append(_read_upload(f))
 
-    meta = MESSAGES.get(shape, {})
-    return {
-        "face_shape": shape,
-        "message": meta.get("message", ""),
-        "rasa": meta.get("rasa"),
-        "celestial": meta.get("celestial"),
-        "code": meta.get("code"),
+    # Fallback to single-file if no 'files' provided
+    if not frames and file:
+        frames.append(_read_upload(file))
+
+    if not frames:
+        raise HTTPException(status_code=400, detail="No image(s) provided. Send 'files' or 'file'.")
+
+    # Call analyzer: prefer analyze_frames(frames), else legacy analyze(frame)
+    try:
+        if hasattr(face_shape, "analyze_frames"):
+            # New multi-frame API: expects List[bytes] (or adjust inside face_shape)
+            result = face_shape.analyze_frames(frames)
+        elif hasattr(face_shape, "analyze"):
+            # Legacy single-frame analyzer: use first frame only
+            result = face_shape.analyze(frames[0])
+        else:
+            raise RuntimeError("face_shape module has neither 'analyze_frames' nor 'analyze'.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Analyzer error: {e}")
+
+    # Ensure a consistent response shape
+    # Expected keys: face_shape, message, and any extras you add (e.g., debug, ratios, etc.)
+    if not isinstance(result, dict):
+        raise HTTPException(status_code=500, detail="Analyzer returned unexpected result type.")
+
+    # Minimal contract
+    payload = {
+        "face_shape": result.get("face_shape"),
+        "message": result.get("message"),
+        # pass through any extra keys your analyzer adds
+        **{k: v for k, v in result.items() if k not in {"face_shape", "message"}}
     }
+
+    return JSONResponse(payload)
+
+if __name__ == "__main__":
+    # Bind to 0.0.0.0 for Docker
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=False)
