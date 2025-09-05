@@ -38,16 +38,18 @@ UPPER_FOREHEAD_CORRECTION = 1.10  # multiply hairline->chin by this to approxima
 
 # --------------------------------------------------------------------------------------
 
+
 @dataclass
 class FrameMeasure:
     ok: bool
     reason: Optional[str]
-    face_hl_h: float = 0.0  # corrected L (normalized)
+    raw_face_hl_h: float = 0.0  # raw hairline->chin normalized height (pre-correction)
+    face_hl_h: float = 0.0      # corrected L (normalized) = raw_face_hl_h * UPPER_FOREHEAD_CORRECTION
     forehead_w: float = 0.0
     cheek_w: float = 0.0
     jaw_w: float = 0.0
     cw: float = 0.0         # chin length (nose base -> chin)
-    lf: float = 0.0         # lower-face share = cw / L
+    lf: float = 0.0         # lower-face share = cw / L (uses corrected L)
     fj: float = 0.0         # forehead/jaw ratio = forehead_w / jaw_w
     roll_deg: float = 0.0
     yaw_proxy: float = 0.0
@@ -152,11 +154,13 @@ def _measure_from_landmarks(
     yaw  = _estimate_yaw_proxy(lm)
 
     # Size gate: hairline↔chin (normalized height)
-    face_hl_h = abs(lm[LM_CHIN][1] - lm[LM_HAIRLINE][1])
+    raw_face_hl_h = abs(lm[LM_CHIN][1] - lm[LM_HAIRLINE][1])
     # Apply correction for upper forehead not well captured by LM_HAIRLINE
-    face_hl_h *= UPPER_FOREHEAD_CORRECTION
+    corrected_face_hl_h = raw_face_hl_h * UPPER_FOREHEAD_CORRECTION
 
-    size_ok = abs(face_hl_h - TARGET_HL_H) <= (TARGET_HL_H * SIZE_TOL)
+    # Use RAW measurement for gating (keeps TARGET_HL_H semantics consistent)
+    size_ok = abs(raw_face_hl_h - TARGET_HL_H) <= (TARGET_HL_H * SIZE_TOL)
+
     pose_ok = (roll <= ROLL_MAX_DEG) and (yaw <= YAW_MAX_DEG)
     frame_ok = (
         pose_ok and
@@ -173,8 +177,6 @@ def _measure_from_landmarks(
     cheek_w    = _dist_norm(lm[LM_CHEEK_L], lm[LM_CHEEK_R])
 
     # Jaw width approximation:
-    # Many maps use jaw corners near jawline; we proxy using
-    # the widest part in the lower half: take min/max x among points y >= midY.
     midy = (lm[LM_HAIRLINE][1] + lm[LM_CHIN][1]) / 2.0
     lower = [p for p in lm if p[1] >= midy]
     if lower:
@@ -188,14 +190,15 @@ def _measure_from_landmarks(
     nose_base = lm[LM_NOSE_BASE]
     cw = abs(lm[LM_CHIN][1] - nose_base[1])  # normalized vertical distance
 
-    # Lower-face share and F/J ratio
-    lf = cw / max(1e-6, face_hl_h)   # lower-face share (0..1)
+    # Lower-face share and F/J ratio (use corrected face height for these derived metrics)
+    lf = cw / max(1e-6, corrected_face_hl_h)   # lower-face share (0..1)
     fj = forehead_w / max(1e-6, jaw_w)
 
     return FrameMeasure(
         ok=frame_ok,
         reason=None if frame_ok else "gate_failed",
-        face_hl_h=face_hl_h,
+        raw_face_hl_h=raw_face_hl_h,
+        face_hl_h=corrected_face_hl_h,
         forehead_w=forehead_w,
         cheek_w=cheek_w,
         jaw_w=jaw_w,
@@ -237,26 +240,19 @@ def _classify_from_aggregates(
         lf = cw / max(1e-6, face_hl_h)
 
     # --- Decision logic (tunable thresholds) ---
-    # 1) Long / oblong vs oval
     if aspect >= 1.55:
-        # If a large share of the height is in the lower face, call it oblong
         if lf is not None and lf >= 0.50:
-            return "rectangle"  # aka oblong
-        # otherwise treat as oval (taller but not long-lower-face)
+            return "rectangle"
         return "oval"
 
-    # 2) Square vs round (rough)
     if abs(fj - 1.0) < 0.02 and aspect <= 1.2:
-        # Similar forehead and jaw width
         return "square" if cheek_dominance < 0.01 else "round"
 
-    # 3) Heart / Diamond (use fj ratio and cheek prominence)
     if fj > 1.15 and cheek_dominance > 0.00:
         return "heart"
     if cheek_dominance > 0.02 and fj < 0.95:
         return "diamond"
 
-    # 4) Round vs oval middle band
     if aspect < 1.25:
         if lf is not None:
             if lf <= 0.40:
@@ -265,7 +261,6 @@ def _classify_from_aggregates(
                 return "oval"
         return "round"
 
-    # 5) fallback: treat as oval
     return "oval"
 
 
@@ -305,6 +300,7 @@ def _aggregate_measures(ms: List[FrameMeasure]) -> FrameMeasure:
     return FrameMeasure(
         ok=True,
         reason=None,
+        raw_face_hl_h=med([m.raw_face_hl_h for m in vals]),
         face_hl_h=med([m.face_hl_h for m in vals]),
         forehead_w=med([m.forehead_w for m in vals]),
         cheek_w=med([m.cheek_w for m in vals]),
@@ -320,6 +316,7 @@ def _aggregate_measures(ms: List[FrameMeasure]) -> FrameMeasure:
 
 
 # ----------------------------- Public API (used by main.py) -----------------------------
+
 
 def analyze(frame_bytes: bytes) -> Dict[str, Any]:
     """
