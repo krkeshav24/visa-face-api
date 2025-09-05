@@ -18,7 +18,7 @@ except Exception as e:
 # ------------- Tunables (keep these in sync with frontend where possible) -------------
 ROLL_MAX_DEG = 3.0
 YAW_MAX_DEG  = 3.0
-TARGET_HL_H  = 0.38       # expected hairline(#10) → chin(#152) normalized height
+TARGET_HL_H  = 0.38       # expected hairline(#10) → chin(#152) normalized height (before correction)
 SIZE_TOL     = 0.03       # ± tolerance (i.e., accept if |h - TARGET_HL_H| <= TARGET_HL_H*SIZE_TOL)
 BRIGHT_MIN   = 40         # looser than frontend (server often receives compressed frames)
 BRIGHT_MAX   = 245
@@ -31,6 +31,10 @@ LM_CHEEK_L   = 234
 LM_CHEEK_R   = 454
 LM_TEMPLE_L  = 127
 LM_TEMPLE_R  = 356
+LM_NOSE_BASE = 1    # central nose base landmark; tune if you prefer another index
+
+# Correction factor for upper forehead not captured by lm[10]
+UPPER_FOREHEAD_CORRECTION = 1.10  # multiply hairline->chin by this to approximate true top-of-forehead
 
 # --------------------------------------------------------------------------------------
 
@@ -38,10 +42,13 @@ LM_TEMPLE_R  = 356
 class FrameMeasure:
     ok: bool
     reason: Optional[str]
-    face_hl_h: float = 0.0
+    face_hl_h: float = 0.0  # corrected L (normalized)
     forehead_w: float = 0.0
     cheek_w: float = 0.0
     jaw_w: float = 0.0
+    cw: float = 0.0         # chin length (nose base -> chin)
+    lf: float = 0.0         # lower-face share = cw / L
+    fj: float = 0.0         # forehead/jaw ratio = forehead_w / jaw_w
     roll_deg: float = 0.0
     yaw_proxy: float = 0.0
     brightness: float = 0.0
@@ -144,8 +151,10 @@ def _measure_from_landmarks(
     roll = _estimate_roll_deg(lm)
     yaw  = _estimate_yaw_proxy(lm)
 
-    # Size gate: hairline↔chin
-    face_hl_h = abs(lm[LM_CHIN][1] - lm[LM_HAIRLINE][1])  # normalized height
+    # Size gate: hairline↔chin (normalized height)
+    face_hl_h = abs(lm[LM_CHIN][1] - lm[LM_HAIRLINE][1])
+    # Apply correction for upper forehead not well captured by LM_HAIRLINE
+    face_hl_h *= UPPER_FOREHEAD_CORRECTION
 
     size_ok = abs(face_hl_h - TARGET_HL_H) <= (TARGET_HL_H * SIZE_TOL)
     pose_ok = (roll <= ROLL_MAX_DEG) and (yaw <= YAW_MAX_DEG)
@@ -164,7 +173,7 @@ def _measure_from_landmarks(
     cheek_w    = _dist_norm(lm[LM_CHEEK_L], lm[LM_CHEEK_R])
 
     # Jaw width approximation:
-    # Many maps use  jaw corners near  jawline; we proxy using
+    # Many maps use jaw corners near jawline; we proxy using
     # the widest part in the lower half: take min/max x among points y >= midY.
     midy = (lm[LM_HAIRLINE][1] + lm[LM_CHIN][1]) / 2.0
     lower = [p for p in lm if p[1] >= midy]
@@ -175,6 +184,14 @@ def _measure_from_landmarks(
     else:
         jaw_w = cheek_w * 0.9  # fallback
 
+    # Chin length (nose base -> chin tip)
+    nose_base = lm[LM_NOSE_BASE]
+    cw = abs(lm[LM_CHIN][1] - nose_base[1])  # normalized vertical distance
+
+    # Lower-face share and F/J ratio
+    lf = cw / max(1e-6, face_hl_h)   # lower-face share (0..1)
+    fj = forehead_w / max(1e-6, jaw_w)
+
     return FrameMeasure(
         ok=frame_ok,
         reason=None if frame_ok else "gate_failed",
@@ -182,6 +199,9 @@ def _measure_from_landmarks(
         forehead_w=forehead_w,
         cheek_w=cheek_w,
         jaw_w=jaw_w,
+        cw=cw,
+        lf=lf,
+        fj=fj,
         roll_deg=roll,
         yaw_proxy=yaw,
         brightness=brightness,
@@ -193,38 +213,59 @@ def _classify_from_aggregates(
     forehead_w: float,
     cheek_w: float,
     jaw_w: float,
-    face_hl_h: float
+    face_hl_h: float,
+    cw: Optional[float] = None
 ) -> str:
     """
-    Very lightweight heuristic:
-      - Long vs wide: aspect proxy = face_hl_h / cheek_w
-      - Forehead vs jaw tapering
-      - Cheek prominence
+    Heuristic using:
+      - aspect = face_hl_h / cheek_w         (taller vs wider)
+      - lf = cw / face_hl_h                  (lower-face share)
+      - fj = forehead_w / jaw_w              (forehead vs jaw ratio)
+      - cheek_dominance = cheek_w - max(forehead_w, jaw_w)
     """
     # Prevent division by zero
     cheek_w = max(cheek_w, 1e-6)
+    jaw_w = max(jaw_w, 1e-6)
 
     aspect = face_hl_h / cheek_w  # taller → larger
-    taper  = forehead_w - jaw_w   # >0 means wider forehead than jaw
+    fj = forehead_w / jaw_w
+    taper = forehead_w - jaw_w
     cheek_dominance = cheek_w - max(forehead_w, jaw_w)
 
-    # Thresholds tuned to normalized-landmark space; adjust as needed
+    lf = None
+    if cw is not None:
+        lf = cw / max(1e-6, face_hl_h)
+
+    # --- Decision logic (tunable thresholds) ---
+    # 1) Long / oblong vs oval
     if aspect >= 1.55:
-        # clearly long/tall
-        return "rectangle"  # aka oblong
-    if abs(taper) < 0.02 and aspect <= 1.2:
-        # similar forehead/jaw, near as wide as tall → square vs round by angles (we can't easily measure angles here)
-        # fallback split via cheek dominance:
+        # If a large share of the height is in the lower face, call it oblong
+        if lf is not None and lf >= 0.50:
+            return "rectangle"  # aka oblong
+        # otherwise treat as oval (taller but not long-lower-face)
+        return "oval"
+
+    # 2) Square vs round (rough)
+    if abs(fj - 1.0) < 0.02 and aspect <= 1.2:
+        # Similar forehead and jaw width
         return "square" if cheek_dominance < 0.01 else "round"
-    if taper > 0.03 and cheek_dominance > 0.00:
-        # bigger forehead, narrow jaw, strong cheeks
+
+    # 3) Heart / Diamond (use fj ratio and cheek prominence)
+    if fj > 1.15 and cheek_dominance > 0.00:
         return "heart"
-    if cheek_dominance > 0.02 and taper < 0.00:
-        # cheekbones widest, forehead & jaw narrower
+    if cheek_dominance > 0.02 and fj < 0.95:
         return "diamond"
-    if aspect < 1.25 and cheek_dominance <= 0.01:
+
+    # 4) Round vs oval middle band
+    if aspect < 1.25:
+        if lf is not None:
+            if lf <= 0.40:
+                return "round"
+            if lf >= 0.48:
+                return "oval"
         return "round"
-    # default
+
+    # 5) fallback: treat as oval
     return "oval"
 
 
@@ -268,6 +309,9 @@ def _aggregate_measures(ms: List[FrameMeasure]) -> FrameMeasure:
         forehead_w=med([m.forehead_w for m in vals]),
         cheek_w=med([m.cheek_w for m in vals]),
         jaw_w=med([m.jaw_w for m in vals]),
+        cw=med([m.cw for m in vals]),
+        lf=med([m.lf for m in vals]),
+        fj=med([m.fj for m in vals]),
         roll_deg=med([m.roll_deg for m in vals]),
         yaw_proxy=med([m.yaw_proxy for m in vals]),
         brightness=med([m.brightness for m in vals]),
@@ -296,7 +340,7 @@ def analyze(frame_bytes: bytes) -> Dict[str, Any]:
             "debug": m.__dict__,
         }
 
-    shape = _classify_from_aggregates(m.forehead_w, m.cheek_w, m.jaw_w, m.face_hl_h)
+    shape = _classify_from_aggregates(m.forehead_w, m.cheek_w, m.jaw_w, m.face_hl_h, cw=m.cw)
     return {
         "face_shape": shape,
         "message": _friendly_message(shape),
@@ -335,7 +379,7 @@ def analyze_frames(frames: List[bytes]) -> Dict[str, Any]:
             "debug": worst.__dict__,
         }
 
-    shape = _classify_from_aggregates(agg.forehead_w, agg.cheek_w, agg.jaw_w, agg.face_hl_h)
+    shape = _classify_from_aggregates(agg.forehead_w, agg.cheek_w, agg.jaw_w, agg.face_hl_h, cw=agg.cw)
     return {
         "face_shape": shape,
         "message": _friendly_message(shape),
