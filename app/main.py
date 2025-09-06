@@ -38,6 +38,7 @@ def _save_bytes_as_file(data: bytes, orig_filename: str) -> str:
     fpath = os.path.join(SAVE_DIR, fname)
     with open(fpath, "wb") as fh:
         fh.write(data)
+    print(f"Saved image: {fpath}")    
     return fname
 
 def _save_json_for_image(filename: str, payload: Dict[str, Any]) -> None:
