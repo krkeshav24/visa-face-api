@@ -22,7 +22,7 @@ TARGET_HL_H  = 0.38       # expected hairline(#10) → chin(#152) normalized hei
 SIZE_TOL     = 0.03       # ± tolerance (i.e., accept if |h - TARGET_HL_H| <= TARGET_HL_H*SIZE_TOL)
 BRIGHT_MIN   = 40         # looser than frontend (server often receives compressed frames)
 BRIGHT_MAX   = 245
-BLUR_MIN_VAR = 60.0       # Laplacian variance; higher is sharper
+BLUR_MIN_VAR = 10.0       # Laplacian variance; higher is sharper
 
 # Landmarks we use (MediaPipe FaceMesh 468-index model)
 LM_HAIRLINE  = 10
