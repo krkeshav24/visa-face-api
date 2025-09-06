@@ -19,7 +19,7 @@ except Exception as e:
 ROLL_MAX_DEG = 3.0
 YAW_MAX_DEG  = 3.0
 TARGET_HL_H  = 0.38       # expected hairline(#10) → chin(#152) normalized height
-SIZE_TOL     = 0.03       # ± tolerance (i.e., accept if |h - TARGET_HL_H| <= TARGET_HL_H*SIZE_TOL)
+SIZE_TOL     = 0.07       # ± tolerance (i.e., accept if |h - TARGET_HL_H| <= TARGET_HL_H*SIZE_TOL)
 BRIGHT_MIN   = 40         # looser than frontend (server often receives compressed frames)
 BRIGHT_MAX   = 245
 BLUR_MIN_VAR = 10.0       # Laplacian variance; higher is sharper
