@@ -20,9 +20,9 @@ ROLL_MAX_DEG = 3.0
 YAW_MAX_DEG  = 3.0
 TARGET_HL_H  = 0.38       # expected hairline(#10) → chin(#152) normalized height
 SIZE_TOL     = 0.03       # ± tolerance (i.e., accept if |h - TARGET_HL_H| <= TARGET_HL_H*SIZE_TOL)
-BRIGHT_MIN   = 30         # looser than frontend (server often receives compressed frames)
+BRIGHT_MIN   = 40         # looser than frontend (server often receives compressed frames)
 BRIGHT_MAX   = 245
-BLUR_MIN_VAR = 45.0       # Laplacian variance; higher is sharper
+BLUR_MIN_VAR = 60.0       # Laplacian variance; higher is sharper
 
 # Landmarks we use (MediaPipe FaceMesh 468-index model)
 LM_HAIRLINE  = 10
@@ -338,7 +338,7 @@ def analyze_frames(frames: List[bytes]) -> Dict[str, Any]:
     shape = _classify_from_aggregates(agg.forehead_w, agg.cheek_w, agg.jaw_w, agg.face_hl_h)
     return {
         "face_shape": shape,
-        "message": _MESSAGES.get(shape, "fallback message"),
+        "message": _friendly_message(shape),
         "debug": {
             "aggregated": agg.__dict__,
             "count_valid": sum(1 for m in measures if m.ok),
