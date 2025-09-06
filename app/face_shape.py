@@ -18,7 +18,7 @@ except Exception as e:
 # ------------- Tunables (keep these in sync with frontend where possible) -------------
 ROLL_MAX_DEG = 3.0
 YAW_MAX_DEG  = 3.0
-TARGET_HL_H  = 0.48       # expected hairline(#10) → chin(#152) normalized height (before correction)
+TARGET_HL_H  = 0.38       # expected hairline(#10) → chin(#152) normalized height (before correction)
 SIZE_TOL     = 0.13       # ± tolerance (i.e., accept if |h - TARGET_HL_H| <= TARGET_HL_H*SIZE_TOL)
 BRIGHT_MIN   = 40         # looser than frontend (server often receives compressed frames)
 BRIGHT_MAX   = 245
