@@ -26,7 +26,7 @@ app.add_middleware(
 )
 
 # ----------------- Image saving setup -----------------
-SAVE_DIR = os.path.join(os.path.dirname(__file__), "Images")
+SAVE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Images")
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 def _unique_filename(orig_name: str) -> str:
