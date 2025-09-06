@@ -140,7 +140,7 @@ def _measure_from_landmarks(lm, brightness, blur_var) -> FrameMeasure:
 
     raw_face_hl_h = abs(lm[LM_CHIN][1]-lm[LM_HAIRLINE][1])
     face_hl_h = raw_face_hl_h*UPPER_FOREHEAD_CORRECTION
-    # size_ok = abs(raw_face_hl_h-TARGET_HL_H) <= TARGET_HL_H*SIZE_TOL
+    # bypass size gate for now
     size_ok = True
 
     frame_ok = (roll<=ROLL_MAX_DEG and yaw<=YAW_MAX_DEG and
@@ -171,8 +171,11 @@ def _measure_from_landmarks(lm, brightness, blur_var) -> FrameMeasure:
 def _classify_from_aggregates(forehead_w, cheek_w, jaw_w, face_hl_h,
                               cw=None, jaw_angle_deg=None, jr=None):
     """
+    AR-first calibrated flow:
+      - AR ≥ 1.45 → Long → Rectangle vs Oval
+      - AR ≤ 1.25 → Short → Round vs Square
+      - else → Medium → Heart vs Diamond
     Returns: (shape: str, confidence: float, details: dict)
-             details also includes percentage scores for all shapes
     """
     cheek_w = max(cheek_w, 1e-6)
     jaw_w = max(jaw_w, 1e-6)
@@ -184,35 +187,36 @@ def _classify_from_aggregates(forehead_w, cheek_w, jaw_w, face_hl_h,
     if jaw_angle_deg is None: jaw_angle_deg=110.0
     if jr is None: jr=jaw_w/cheek_w
 
-    # --- Raw score assignment per face type ---
-    scores = {s:0.0 for s in ["oval","round","square","rectangle","diamond","heart","oblong"]}
+    scores = {s:0.0 for s in ["oval","round","square","rectangle","diamond","heart"]}
 
-    # Heart / Diamond
-    if fj > 1.05: scores["heart"] += 1.0
-    if fj < 0.95: scores["diamond"] += 1.0
+    # --- AR-first grouping ---
+    if aspect >= 1.45:  # Long group
+        if jaw_angle_deg <= 110 and jr >= 0.9:
+            scores["rectangle"] += 1.0
+        else:
+            scores["oval"] += 1.0
 
-    # Rectangle / Oval / Oblong
-    if aspect >= 1.50: scores["rectangle"] += 1.0
-    if 1.35 <= aspect < 1.50: scores["oval"] += 1.0
-    if 1.50 <= aspect < 1.65: scores["oblong"] += 0.5  # treat oblong as long-oval
+    elif aspect <= 1.25:  # Short group
+        if lf and lf >= 0.32:
+            scores["square"] += 1.0
+        else:
+            scores["round"] += 1.0
 
-    # Round / Square
-    if aspect < 1.20:
-        if lf and lf >= 0.32: scores["square"] += 1.0
-        else: scores["round"] += 1.0
+    else:  # Medium group
+        if fj > 1.05:
+            scores["heart"] += 1.0
+        else:
+            scores["diamond"] += 1.0
 
-    # Normalize to percentages
     total = sum(scores.values())
     if total <= 0: total = 1e-6
     percentages = {k: round(v/total*100,2) for k,v in scores.items()}
 
-    # Pick winner
     shape = max(percentages, key=percentages.get)
     confidence = percentages[shape]/100.0
 
     details = {"aspect":aspect,"fj":fj,"lf":lf,"theta":jaw_angle_deg,"jr":jr,
-               "scores":scores,"percentages":percentages}
-
+               "percentages":percentages}
     return shape, confidence, details
 
 
@@ -224,8 +228,6 @@ def _friendly_message(face_shape: str) -> str:
         "rectangle":"Longer than wide — choose wider or layered styles.",
         "diamond":"Cheekbones are widest — add width at the jaw.",
         "heart":"Wider forehead with tapered jaw — add volume near jawline.",
-        "oblong":"Elongated version of oval — try styles adding width.",
-        "uncertain":"Face type not clear — mixed features detected."
     }
     return msgs.get(face_shape,"Face analyzed.")
 
