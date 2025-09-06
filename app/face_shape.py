@@ -338,7 +338,7 @@ def analyze_frames(frames: List[bytes]) -> Dict[str, Any]:
     shape = _classify_from_aggregates(agg.forehead_w, agg.cheek_w, agg.jaw_w, agg.face_hl_h)
     return {
         "face_shape": shape,
-        "message": _friendly_message(shape),
+        "message": _MESSAGES.get(shape, "fallback message"),
         "debug": {
             "aggregated": agg.__dict__,
             "count_valid": sum(1 for m in measures if m.ok),
