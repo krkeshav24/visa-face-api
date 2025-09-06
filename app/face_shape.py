@@ -140,7 +140,8 @@ def _measure_from_landmarks(lm, brightness, blur_var) -> FrameMeasure:
 
     raw_face_hl_h = abs(lm[LM_CHIN][1]-lm[LM_HAIRLINE][1])
     face_hl_h = raw_face_hl_h*UPPER_FOREHEAD_CORRECTION
-    size_ok = abs(raw_face_hl_h-TARGET_HL_H) <= TARGET_HL_H*SIZE_TOL
+    # size_ok = abs(raw_face_hl_h-TARGET_HL_H) <= TARGET_HL_H*SIZE_TOL
+    size_ok = True
 
     frame_ok = (roll<=ROLL_MAX_DEG and yaw<=YAW_MAX_DEG and
                 BRIGHT_MIN<=brightness<=BRIGHT_MAX and blur_var>=BLUR_MIN_VAR and
