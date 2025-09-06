@@ -34,13 +34,6 @@ LM_JAW_L     = 172
 LM_JAW_R     = 397
 
 UPPER_FOREHEAD_CORRECTION = 1.10
-
-# Confidence scoring margins
-AR_MARGIN = 0.02
-LF_MARGIN = 0.02
-FJ_MARGIN = 0.02
-THETA_MARGIN = 5.0
-JR_MARGIN = 0.03
 # ------------------------------------------
 
 
@@ -177,8 +170,8 @@ def _measure_from_landmarks(lm, brightness, blur_var) -> FrameMeasure:
 def _classify_from_aggregates(forehead_w, cheek_w, jaw_w, face_hl_h,
                               cw=None, jaw_angle_deg=None, jr=None):
     """
-    Priority/tie-breaker classification with confidence scoring.
     Returns: (shape: str, confidence: float, details: dict)
+             details also includes percentage scores for all shapes
     """
     cheek_w = max(cheek_w, 1e-6)
     jaw_w = max(jaw_w, 1e-6)
@@ -190,20 +183,36 @@ def _classify_from_aggregates(forehead_w, cheek_w, jaw_w, face_hl_h,
     if jaw_angle_deg is None: jaw_angle_deg=110.0
     if jr is None: jr=jaw_w/cheek_w
 
-    def near(v,t,m): return abs(v-t)<=m
+    # --- Raw score assignment per face type ---
+    scores = {s:0.0 for s in ["oval","round","square","rectangle","diamond","heart","oblong"]}
 
-    # FJ extremes
-    if fj>1.05: return "heart",0.8,{"aspect":aspect,"fj":fj,"lf":lf,"theta":jaw_angle_deg,"jr":jr}
-    if fj<0.95: return "diamond",0.8,{"aspect":aspect,"fj":fj,"lf":lf,"theta":jaw_angle_deg,"jr":jr}
+    # Heart / Diamond
+    if fj > 1.05: scores["heart"] += 1.0
+    if fj < 0.95: scores["diamond"] += 1.0
 
-    # Balanced FJ
-    if aspect>=1.50: return "rectangle",0.8,{"aspect":aspect,"fj":fj,"lf":lf,"theta":jaw_angle_deg,"jr":jr}
-    if 1.35<=aspect<1.50: return "oval",0.8,{"aspect":aspect,"fj":fj,"lf":lf,"theta":jaw_angle_deg,"jr":jr}
-    if aspect<1.20:
-        if lf and lf>=0.32: return "square",0.8,{"aspect":aspect,"fj":fj,"lf":lf,"theta":jaw_angle_deg,"jr":jr}
-        else: return "round",0.8,{"aspect":aspect,"fj":fj,"lf":lf,"theta":jaw_angle_deg,"jr":jr}
+    # Rectangle / Oval / Oblong
+    if aspect >= 1.50: scores["rectangle"] += 1.0
+    if 1.35 <= aspect < 1.50: scores["oval"] += 1.0
+    if 1.50 <= aspect < 1.65: scores["oblong"] += 0.5  # treat oblong as long-oval
 
-    return "uncertain",0.45,{"aspect":aspect,"fj":fj,"lf":lf,"theta":jaw_angle_deg,"jr":jr}
+    # Round / Square
+    if aspect < 1.20:
+        if lf and lf >= 0.32: scores["square"] += 1.0
+        else: scores["round"] += 1.0
+
+    # Normalize to percentages
+    total = sum(scores.values())
+    if total <= 0: total = 1e-6
+    percentages = {k: round(v/total*100,2) for k,v in scores.items()}
+
+    # Pick winner
+    shape = max(percentages, key=percentages.get)
+    confidence = percentages[shape]/100.0
+
+    details = {"aspect":aspect,"fj":fj,"lf":lf,"theta":jaw_angle_deg,"jr":jr,
+               "scores":scores,"percentages":percentages}
+
+    return shape, confidence, details
 
 
 def _friendly_message(face_shape: str) -> str:
@@ -214,6 +223,7 @@ def _friendly_message(face_shape: str) -> str:
         "rectangle":"Longer than wide — choose wider or layered styles.",
         "diamond":"Cheekbones are widest — add width at the jaw.",
         "heart":"Wider forehead with tapered jaw — add volume near jawline.",
+        "oblong":"Elongated version of oval — try styles adding width.",
         "uncertain":"Face type not clear — mixed features detected."
     }
     return msgs.get(face_shape,"Face analyzed.")
@@ -231,7 +241,8 @@ def analyze(frame_bytes: bytes) -> Dict[str, Any]:
     if not m.ok:
         return {"face_shape": None, "message": "Face not suitable.", "debug": m.__dict__}
 
-    shape, conf, details = _classify_from_aggregates(m.forehead_w,m.cheek_w,m.jaw_w,m.face_hl_h,cw=m.cw,jaw_angle_deg=m.jaw_angle_deg,jr=m.jr)
+    shape, conf, details = _classify_from_aggregates(m.forehead_w,m.cheek_w,m.jaw_w,m.face_hl_h,
+                                                     cw=m.cw,jaw_angle_deg=m.jaw_angle_deg,jr=m.jr)
     return {"face_shape": shape,"message": _friendly_message(shape),
             "debug": {**m.__dict__,"confidence": conf,"classify_details": details}}
 
@@ -249,8 +260,8 @@ def analyze_frames(frames: List[bytes]) -> Dict[str, Any]:
     if not measures:
         return {"face_shape": None,"message": "No valid frames."}
 
-    # take median across measures
-    agg=measures[0]
-    shape,conf,details=_classify_from_aggregates(agg.forehead_w,agg.cheek_w,agg.jaw_w,agg.face_hl_h,cw=agg.cw,jaw_angle_deg=agg.jaw_angle_deg,jr=agg.jr)
+    agg=measures[0]  # simplification: use first valid
+    shape,conf,details=_classify_from_aggregates(agg.forehead_w,agg.cheek_w,agg.jaw_w,agg.face_hl_h,
+                                                 cw=agg.cw,jaw_angle_deg=agg.jaw_angle_deg,jr=agg.jr)
     return {"face_shape": shape,"message": _friendly_message(shape),
             "debug":{"aggregated":agg.__dict__,"confidence":conf,"classify_details":details,"count_total":len(measures)}}
