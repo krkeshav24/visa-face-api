@@ -9,4 +9,6 @@ services:
       - .env          # <-- use a real .env on the server
     ports:
       - "8000:8000"   # change if your app uses another port
+    volumes:
+      - ./Images:/app/Images   # <-- host Images folder persists container data
     restart: unless-stopped
