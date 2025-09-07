@@ -33,7 +33,7 @@ LM_NOSE_BASE = 1
 LM_JAW_L     = 172
 LM_JAW_R     = 397
 
-UPPER_FOREHEAD_CORRECTION = 1.10
+UPPER_FOREHEAD_CORRECTION = 1.15
 # ------------------------------------------
 
 
