@@ -1,36 +1,36 @@
 {
   "oval": {
-    "message": "Your Style Signature is Grace inspired by Lyra — a harmony of balanced proportions and timeless elegance. These designs will enhance your natural symmetry. Your facial energy matches with Rihanna and Julia Roberts.",
+    "message": "You have balanced features with gentle curves. These designs will enhance your natural symmetry.  Rihanna and Julia Roberts have similar facial aura.",
     "rasa": "Grace",
     "celestial": "Lyra",
     "code": "OVL"
   },
   "round": {
-    "message": "Your Style Signature is Zen inspired by Orion — serene, balanced, and radiating quiet strength. These styles bring gentle focus to your features. Your facial energy matches with Selena Gomez and Aishwarya Rai Bachchan.",
+    "message": "You have softer angles with similar width and height — here are lengthening styles that will bring gentle focus to your features. Your aura mirrors Selena Gomez and Aishwarya Rai Bachchan.",
     "rasa": "Zen",
     "celestial": "Orion",
     "code": "RND"
   },
   "square": {
-    "message": "Your Style Signature is Valor inspired by Vega — bold lines and confident geometry. These designs amplify your inner strength. Your facial energy matches with Jennifer Aniston and Demi Moore.",
+    "message": "You have strong jawline and broad forehead — these curves and drop styles will soften your features. Your aura mirrors Jennifer Aniston and Demi Moore.",
     "rasa": "Valor",
     "celestial": "Vega",
     "code": "SQR"
   },
   "heart": {
-    "message": "Your Style Signature is Muse inspired by Atria — playful elegance with a touch of romance. These designs bring softness and allure to your look. Your facial energy matches with Naomi Campbell and Deepika Padukone.",
+    "message": "You have longer than wide face with a straighter jaw - these wider and layered styles will add softness to your energy. Naomi Campbell and Deepika Padukone have similar aura.",
     "rasa": "Muse",
     "celestial": "Atria",
     "code": "HRT"
   },
   "diamond": {
-    "message": "Your Style Signature is Verve inspired by Altair — dynamic, captivating, and full of energy. These pieces accentuate your natural sparkle. Your facial energy matches with Jennifer Lopez and Scarlett Johansson.",
+    "message": "Your face has cheekbones as the widest point — these styles will add width at the jaw. Your aura mirrors Jennifer Lopez and Scarlett Johansson.",
     "rasa": "Verve",
     "celestial": "Altair",
     "code": "DMN"
   },
   "rectangle": {
-    "message": "Your Style Signature is Poise inspired by Cygnus — graceful length and refined balance. These designs bring proportion and sophistication. Your facial energy matches with Katrina Kaif and Meryl Streep.",
+    "message": "You have wider forehead with a tapered jaw — these styles will add volume near your jawline and enhance your sophistication. Your aura mirrors Katrina Kaif and Meryl Streep.",
     "rasa": "Poise",
     "celestial": "Cygnus",
     "code": "OBL"
