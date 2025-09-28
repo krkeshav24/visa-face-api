@@ -2,6 +2,7 @@
   "oval": {
     "message": "You have balanced features with gentle curves. These designs will enhance your natural symmetry.  Rihanna and Julia Roberts have similar facial aura.",
     "rasa": "Grace",
+    "title": "Grace inspired by Lyra!",
     "celestial": "Lyra",
     "code": "OVL"
   },
@@ -9,30 +10,35 @@
     "message": "You have softer angles with similar width and height — here are lengthening styles that will bring gentle focus to your features. Your aura mirrors Selena Gomez and Aishwarya Rai Bachchan.",
     "rasa": "Zen",
     "celestial": "Orion",
+    "title": "Zen inspired by Orion!",
     "code": "RND"
   },
   "square": {
     "message": "You have strong jawline and broad forehead — these curves and drop styles will soften your features. Your aura mirrors Jennifer Aniston and Demi Moore.",
     "rasa": "Valor",
     "celestial": "Vega",
+    "title": "Valor inspired by Vega!",
     "code": "SQR"
   },
   "heart": {
     "message": "You have longer than wide face with a straighter jaw - these wider and layered styles will add softness to your energy. Naomi Campbell and Deepika Padukone have similar aura.",
     "rasa": "Muse",
     "celestial": "Atria",
+    "title": "Muse inspired by Atria!",
     "code": "HRT"
   },
   "diamond": {
     "message": "Your face has cheekbones as the widest point — these styles will add width at the jaw. Your aura mirrors Jennifer Lopez and Scarlett Johansson.",
     "rasa": "Verve",
     "celestial": "Altair",
+    "title": "Verve inspired by Altair!",
     "code": "DMN"
   },
   "rectangle": {
     "message": "You have wider forehead with a tapered jaw — these styles will add volume near your jawline and enhance your sophistication. Your aura mirrors Katrina Kaif and Meryl Streep.",
     "rasa": "Poise",
     "celestial": "Cygnus",
+    "title": "Poise inspired by Cygnus!",
     "code": "OBL"
   }
 }
