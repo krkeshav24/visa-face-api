@@ -6,6 +6,23 @@ from typing import List, Dict, Any, Optional, Tuple
 import math
 import cv2
 import numpy as np
+import os
+import json
+
+# Load external messages.json (expects app/data/messages.json)
+MSG_PATH = os.path.join(os.path.dirname(__file__), "data", "messages.json")
+with open(MSG_PATH, "r", encoding="utf-8") as f:
+    MESSAGES = json.load(f)
+
+def _msg_fields(shape: str) -> Tuple[str, str]:
+    """
+    Returns (title, message) for the given face shape from messages.json.
+    Provides safe fallbacks if the key is missing.
+    """
+    entry = MESSAGES.get(shape) or {}
+    title = entry.get("title", "Face analyzed")
+    message = entry.get("message", "Face analyzed.")
+    return title, message
 
 # MediaPipe
 try:
@@ -220,39 +237,35 @@ def _classify_from_aggregates(forehead_w, cheek_w, jaw_w, face_hl_h,
     return shape, confidence, details
 
 
-def _friendly_message(face_shape: str) -> str:
-    msgs = {
-        "oval":"Balanced features with gentle curves — most earring styles will flatter you.",
-        "round":"Softer angles — go for lengthening styles.",
-        "square":"Strong jawline — try curves and drop styles.",
-        "rectangle":"Longer than wide — choose wider or layered styles.",
-        "diamond":"Cheekbones are widest — add width at the jaw.",
-        "heart":"Wider forehead with tapered jaw — add volume near jawline.",
-    }
-    return msgs.get(face_shape,"Face analyzed.")
-
-
 # ---------------- Public API ----------------
 def analyze(frame_bytes: bytes) -> Dict[str, Any]:
     if not frame_bytes:
-        return {"face_shape": None, "message": "No image received."}
+        return {"face_shape": None, "title": "Face analyzed", "message": "No image received."}
     img = _decode_image_bytes(frame_bytes)
     if img is None:
-        return {"face_shape": None, "message": "Could not decode image."}
+        return {"face_shape": None, "title": "Face analyzed", "message": "Could not decode image."}
 
     m = _measure_from_landmarks(_landmarks_from_img(img), _brightness(img), _blur_laplacian_var(img))
     if not m.ok:
-        return {"face_shape": None, "message": "Face not suitable.", "debug": m.__dict__}
+        # still return fields the client expects
+        return {"face_shape": None, "title": "Face analyzed", "message": "Face not suitable.", "debug": m.__dict__}
 
-    shape, conf, details = _classify_from_aggregates(m.forehead_w,m.cheek_w,m.jaw_w,m.face_hl_h,
-                                                     cw=m.cw,jaw_angle_deg=m.jaw_angle_deg,jr=m.jr)
-    return {"face_shape": shape,"message": _friendly_message(shape),
-            "debug": {**m.__dict__,"confidence": conf,"classify_details": details}}
+    shape, conf, details = _classify_from_aggregates(
+        m.forehead_w, m.cheek_w, m.jaw_w, m.face_hl_h,
+        cw=m.cw, jaw_angle_deg=m.jaw_angle_deg, jr=m.jr
+    )
+    title, message = _msg_fields(shape)
+    return {
+        "face_shape": shape,
+        "title": title,
+        "message": message,
+        "debug": {**m.__dict__, "confidence": conf, "classify_details": details}
+    }
 
 
 def analyze_frames(frames: List[bytes]) -> Dict[str, Any]:
     if not frames:
-        return {"face_shape": None,"message": "No images received."}
+        return {"face_shape": None, "title": "Face analyzed", "message": "No images received."}
     measures=[]
     for b in frames:
         img=_decode_image_bytes(b)
@@ -261,10 +274,22 @@ def analyze_frames(frames: List[bytes]) -> Dict[str, Any]:
         if lm is None: continue
         measures.append(_measure_from_landmarks(lm,_brightness(img),_blur_laplacian_var(img)))
     if not measures:
-        return {"face_shape": None,"message": "No valid frames."}
+        return {"face_shape": None, "title": "Face analyzed", "message": "No valid frames."}
 
     agg=measures[0]  # simplification: use first valid
-    shape,conf,details=_classify_from_aggregates(agg.forehead_w,agg.cheek_w,agg.jaw_w,agg.face_hl_h,
-                                                 cw=agg.cw,jaw_angle_deg=agg.jaw_angle_deg,jr=agg.jr)
-    return {"face_shape": shape,"message": _friendly_message(shape),
-            "debug":{"aggregated":agg.__dict__,"confidence":conf,"classify_details":details,"count_total":len(measures)}}
+    shape,conf,details=_classify_from_aggregates(
+        agg.forehead_w, agg.cheek_w, agg.jaw_w, agg.face_hl_h,
+        cw=agg.cw, jaw_angle_deg=agg.jaw_angle_deg, jr=agg.jr
+    )
+    title, message = _msg_fields(shape)
+    return {
+        "face_shape": shape,
+        "title": title,
+        "message": message,
+        "debug": {
+            "aggregated": agg.__dict__,
+            "confidence": conf,
+            "classify_details": details,
+            "count_total": len(measures)
+        }
+    }
